@@ -51,5 +51,7 @@ Copy `.env.example` to `.env`. The `/api/ai` endpoint currently returns a clear 
 ## Tests
 Backend: `cd backend && pytest tests` — Frontend: `cd frontend && npm test`.
 
+[![Live Demo](https://img.shields.io/badge/Demo-Live%20Preview-brightgreen?style=for-the-badge)](https://voxboard-ai-premium-frontend.onrender.com)
+
 ## Known gaps
 The AI assistant panel and provider adapter, per-session remote pen settings, remote laser. Undo/redo (Ctrl+Z / Ctrl+Y, 100 steps) covers every change, including moves, resizes, deletes, edits and page changes. Text alignment places the selected text box at the left, centre or right of the page. Imported PDFs are stored as 2x-resolution images inside the lesson (max 150 pages, 100 MB); pictures up to 25 MB are kept at up to 4096 px. The lesson limit is 250 MB, and very large lessons autosave slowly because each save sends the whole lesson. Pairing codes expire after 6 hours.
