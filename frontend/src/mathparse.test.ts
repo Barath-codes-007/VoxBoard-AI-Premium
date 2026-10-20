@@ -1,0 +1,12 @@
+import { expect, test } from "vitest";
+import { compile } from "./mathparse";
+const y = (s: string, x: number, p = {}) => compile(s).fn(x, 0, p);
+test("linear", () => expect(y("y = 2x + 3", 2)).toBe(7));
+test("quadratic", () => expect(y("x^2", -3)).toBe(9));
+test("abs", () => expect(y("y=|x|", -4)).toBe(4));
+test("unary minus binds after power", () => expect(y("-x^2", 3)).toBe(-9));
+test("e^x", () => expect(y("y = e^x", 0)).toBe(1));
+test("division by zero", () => expect(y("1/x", 0)).toBe(Infinity));
+test("parameters", () => { const c = compile("y = ax^2 + bx + c"); expect([...c.vars].sort()).toEqual(["a", "b", "c", "x"]); expect(c.fn(2, 0, { a: 1, b: 2, c: 3 })).toBe(11); });
+test("circle is implicit", () => { const c = compile("x^2 + y^2 = 25"); expect(c.kind).toBe("implicit"); expect(c.fn(3, 4, {})).toBe(0); });
+test("invalid input throws", () => { for (const s of ["2+*", "alert(1)", "y = (x", "sinx", "", "x==1", "constructor"]) expect(() => compile(s)).toThrow(); });

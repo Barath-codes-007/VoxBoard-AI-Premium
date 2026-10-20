@@ -1,0 +1,8 @@
+const open = () => new Promise<IDBDatabase>((res, rej) => { const r = indexedDB.open("voxboard", 1); r.onupgradeneeded = () => { r.result.createObjectStore("chunks", { autoIncrement: true }); r.result.createObjectStore("audio"); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const tx = async <T>(store: string, mode: IDBTransactionMode, f: (s: IDBObjectStore) => IDBRequest<T>) => { const d = await open(); return new Promise<T>((res, rej) => { const t = d.transaction(store, mode); const q = f(t.objectStore(store)); t.oncomplete = () => { d.close(); res(q.result); }; t.onerror = t.onabort = () => { d.close(); rej(t.error); }; }); };
+export const putChunk = (sid: string, i: number, blob: Blob) => tx("chunks", "readwrite", s => s.add({ sid, i, blob }));
+export const getChunks = async (sid: string): Promise<Blob[]> => { const all = await tx<any[]>("chunks", "readonly", s => s.getAll()); return all.filter(c => c.sid === sid).sort((a, b) => a.i - b.i).map(c => c.blob as Blob); };
+export const dropChunks = async (sid: string) => { const d = await open(); await new Promise<void>(res => { const t = d.transaction("chunks", "readwrite"); t.objectStore("chunks").openCursor().onsuccess = e => { const c = (e.target as IDBRequest<IDBCursorWithValue | null>).result; if (c) { if (c.value.sid === sid) c.delete(); c.continue(); } }; t.oncomplete = () => { d.close(); res(); }; t.onerror = () => { d.close(); res(); }; }); };
+export const putAudio = (id: string, blob: Blob) => tx("audio", "readwrite", s => s.put(blob, id));
+export const getAudio = (id: string) => tx<Blob | undefined>("audio", "readonly", s => s.get(id));
+export const delAudio = (id: string) => tx("audio", "readwrite", s => s.delete(id));
