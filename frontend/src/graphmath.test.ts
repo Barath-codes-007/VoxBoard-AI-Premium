@@ -1,0 +1,10 @@
+import { expect, test } from "vitest";
+import { roots, intersections, extrema, areaBetween } from "./graphmath";
+test("roots of x^2 - 4", () => { const r = roots(x => x * x - 4, -10, 10); expect(r.length).toBe(2); expect(r[0]).toBeCloseTo(-2, 6); expect(r[1]).toBeCloseTo(2, 6); });
+test("poles are not reported as roots", () => { expect(roots(x => 1 / x, -5, 5)).toEqual([]); });
+test("intersections of y=x and y=x^2", () => { const r = intersections(x => x, x => x * x, -3, 3); expect(r.length).toBe(2); expect(r[0]).toBeCloseTo(0, 6); expect(r[1]).toBeCloseTo(1, 6); });
+test("minimum of x^2 - 4x", () => { const e = extrema(x => x * x - 4 * x, -10, 10); expect(e.length).toBe(1); expect(e[0].x).toBeCloseTo(2, 3); expect(e[0].kind).toBe("minimum"); });
+test("area under x^2 from 0 to 3 is 9", () => { const a = areaBetween(x => x * x, () => 0, 0, 3); expect(a.reliable).toBe(true); expect(a.geometric).toBeCloseTo(9, 5); expect(a.signed).toBeCloseTo(9, 5); });
+test("area between x and x^2 on [0,1] is 1/6", () => { expect(areaBetween(x => x, x => x * x, 0, 1).geometric).toBeCloseTo(1 / 6, 6); });
+test("signed and geometric areas differ when curves cross", () => { const a = areaBetween(x => x, () => 0, -1, 1); expect(a.signed).toBeCloseTo(0, 6); expect(a.geometric).toBeCloseTo(1, 5); });
+test("an interval containing a pole is unreliable", () => { expect(areaBetween(x => 1 / x, () => 0, -1, 1).reliable).toBe(false); });

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { ChevronLeft, Smartphone, Presentation, Mic, MicOff, Settings, MousePointer2, Hand, Pencil, Highlighter, Eraser, Type, Minus, ArrowUpRight, Square, Circle, Crosshair, Undo2, Redo2, ZoomIn, ZoomOut, Maximize, ImagePlus, FileUp, FileJson, Download, Palette, Copy, Trash2, Plus, Bold, Italic, AlignLeft, AlignCenter, AlignRight, List, ListOrdered, MoreHorizontal, Triangle, Diamond, Pentagon, Hexagon, Star, MoveHorizontal, RectangleHorizontal, PaintBucket, BringToFront, SendToBack, ArrowLeft, ArrowRight, Expand, RotateCcw, Sigma, X } from "lucide-react";
+import { ChevronLeft, Smartphone, Presentation, Mic, MicOff, Settings, MousePointer2, Hand, Pencil, Highlighter, Eraser, Type, Minus, ArrowUpRight, Square, Circle, Crosshair, Undo2, Redo2, ZoomIn, ZoomOut, Maximize, ImagePlus, FileUp, FileJson, Download, Palette, Copy, Trash2, Plus, Bold, Italic, AlignLeft, AlignCenter, AlignRight, List, ListOrdered, MoreHorizontal, Triangle, Diamond, Pentagon, Hexagon, Star, MoveHorizontal, RectangleHorizontal, PaintBucket, BringToFront, SendToBack, ArrowLeft, ArrowRight, Expand, RotateCcw, Sigma, X, ChevronUp } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { pending } from "./store";
+import { pending, wsUrl } from "./store";
 import { jsPDF } from "jspdf";
 import { browserSpeech } from "./voice";
 import { makeQueue } from "./queue";
@@ -47,7 +47,7 @@ export default function Board({ lessonId }: { lessonId: string }) {
   const [zoom, setZoom] = useState(1); const [save, setSave] = useState("Saved");
   const [listening, setListening] = useState(false); const [interim, setInterim] = useState("");
   const [lang, setLang] = useState<string>(P.lang || "en-US"); const [speed, setSpeed] = useState<number>(P.speed || 40); const [anim, setAnim] = useState<boolean>(P.anim ?? true);
-  const [err, setErr] = useState(""); const [verr, setVerr] = useState(false); const [busy, setBusy] = useState(""); const [focus, setFocus] = useState(false); const [dock, setDock] = useState(() => innerWidth > 900); const [typed, setTyped] = useState(""); const [pair, setPair] = useState<{ code: string; qr: string; n: number } | null>(null);
+  const [err, setErr] = useState(""); const [verr, setVerr] = useState(false); const [busy, setBusy] = useState(""); const [focus, setFocus] = useState(false); const [qa, setQa] = useState(false); const [dock, setDock] = useState(() => innerWidth > 900); const [typed, setTyped] = useState(""); const [pair, setPair] = useState<{ code: string; qr: string; n: number } | null>(null);
   const [transcript, setTranscript] = useState(""); const [present, setPresent] = useState(false);
   const cv = useRef<HTMLCanvasElement>(null); const draft = useRef<Obj | null>(null); const loaded = useRef(false);
   const selRef = useRef(-1); const dragRef = useRef<number[] | null>(null); const stage = useRef<HTMLDivElement>(null); const clip = useRef<Obj | null>(null);
@@ -212,7 +212,7 @@ export default function Board({ lessonId }: { lessonId: string }) {
   const startPair = async () => {
     try {
       const s = await (await fetch("/api/sessions", { method: "POST" })).json();
-      const w = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/${s.code}?role=host&token=${s.token}`);
+      const w = new WebSocket(wsUrl(`/ws/${s.code}?role=host&token=${s.token}`));
       const url = `${location.origin}/#/remote?code=${s.code}`; const qr = await QRCode.toDataURL(url);
       w.onmessage = ev => { const m = JSON.parse(ev.data); if (m.type === "status") setPair(p => p && { ...p, n: m.remotes }); else if (m.type === "cmd") handleCmd.current(m); };
       w.onclose = () => setErr("Phone connection closed. Click Pair phone to reconnect."); wsRef.current = w; setPair({ code: s.code, qr, n: 0 });
@@ -308,7 +308,7 @@ export default function Board({ lessonId }: { lessonId: string }) {
       </aside>}</div>
       {!present && !focus && <footer className="strip">
         {pages.map((p, i) => <Thumb key={p.id} pg={p} draw={draw} on={i === cur} label={`${i + 1}. ${p.name}`} click={() => setCur(i)} rename={() => { const n = prompt("Rename page", p.name); if (n) { setPages(ps => ps.map((q, j) => j === i ? { ...q, name: n } : q)); setSave("Unsaved"); } }} />)}
-        <button onClick={() => mvPage(-1)}>Move left</button><button onClick={() => mvPage(1)}>Move right</button><button onClick={() => { setPages(ps => [...ps, np(ps.length + 1)]); setCur(pages.length); setSave("Unsaved"); }}>+ Page</button>
+        <button className="sm" onClick={enterFocus} aria-label="Full screen board"><Expand size={14} /> Full screen</button><button onClick={() => mvPage(-1)}>Move left</button><button onClick={() => mvPage(1)}>Move right</button><button onClick={() => { setPages(ps => [...ps, np(ps.length + 1)]); setCur(pages.length); setSave("Unsaved"); }}>+ Page</button>
         <button onClick={() => { setPages(ps => { const c = JSON.parse(JSON.stringify(ps[cur])); c.id = Math.random().toString(36).slice(2); c.name += " copy"; const n = [...ps]; n.splice(cur + 1, 0, c); return n; }); setCur(cur + 1); setSave("Unsaved"); }}>Duplicate</button>
         <button onClick={() => { if (pages.length > 1 && confirm("Delete this page?")) { setPages(ps => ps.filter((_, i) => i !== cur)); setCur(Math.max(0, cur - 1)); setSave("Unsaved"); } }}>Delete page</button>
       </footer>}
@@ -318,6 +318,14 @@ export default function Board({ lessonId }: { lessonId: string }) {
         {Ib(<Undo2 size={18} />, "Undo", false, undo)}{Ib(<Redo2 size={18} />, "Redo", false, redoF)}
         {Ib(<ArrowLeft size={18} />, "Previous page", false, () => setCur(c => Math.max(0, c - 1)))}<span className="status">{cur + 1} / {pages.length}</span>{Ib(<ArrowRight size={18} />, "Next page", false, () => setCur(c => Math.min(pages.length - 1, c + 1)))}
         <button onClick={exitFocus}><X size={15} /> Exit full screen</button></div>}
+      {focus && !present && <div className={"qa" + (qa ? " open" : "")}>
+        <button className="qa-toggle sm" aria-expanded={qa} onClick={() => setQa(v => !v)}><ChevronUp size={15} style={{ transform: qa ? "rotate(180deg)" : "none", transition: "transform .2s" }} /> Quick Access</button>
+        <div className="qa-panel" aria-hidden={!qa}><div className="qa-in">
+          <div className="grp">{tl("select", MousePointer2, "Select")}{tl("pen", Pencil, "Pen")}{tl("hl", Highlighter, "Highlighter")}{tl("eraser", Eraser, "Eraser")}{tl("text", Type, "Text")}</div>
+          <input type="color" value={color} onChange={e => pickColor(e.target.value)} aria-label="Colour" /><label className="row">Size {width}<input type="range" min={1} max={60} value={width} onChange={e => setWidth(+e.target.value)} /></label>
+          <div className="grp">{Ib(<Undo2 size={18} />, "Undo", false, undo)}{Ib(<Redo2 size={18} />, "Redo", false, redoF)}</div>
+          <button className="sm" onClick={goGraph}><Sigma size={15} /> Graph Studio</button>{so2?.graph && <button className="sm" onClick={editGraph}><Sigma size={15} /> Edit selected graph</button>}
+          <button className="sm" onClick={png}><Download size={15} /> Export page PNG</button><button className="sm" onClick={() => setQa(false)}>Collapse</button></div></div></div>}
       {present && <div className="pnav"><button onClick={() => setCur(c => Math.max(0, c - 1))}>Prev</button><button onClick={() => setCur(c => Math.min(pages.length - 1, c + 1))}>Next</button><button onClick={() => setPresent(false)}>Exit</button></div>}
       {modal === "help" && <dialog open className="modal"><h3>Shortcuts</h3><p>Ctrl+Z undo, Ctrl+Y redo, Ctrl+C and Ctrl+V copy and paste, Ctrl+D duplicate, Delete removes the selected object, Esc exits presentation. Double-click text to edit it. Use Select to move objects, Hand to pan.</p><button onClick={() => setModal("")}>Close</button></dialog>}
       {modal === "settings" && <dialog open className="modal"><h3>Settings</h3><p><label>Theme <select value={theme} onChange={e => setTheme(e.target.value)}><option>auto</option><option>light</option><option>dark</option></select></label></p><p><label>New page background <select defaultValue={prefs().bg || "white"} onChange={e => localStorage.setItem("vb", JSON.stringify({ ...prefs(), bg: e.target.value }))}>{["white", "black", "grid", "ruled", "dots"].map(b => <option key={b}>{b}</option>)}</select></label></p><p>Pen colour, thickness, speech language and typing speed are remembered automatically. VoxBoard never records or stores audio; browser speech is processed by your browser vendor's service.</p><button onClick={() => setModal("")}>Close</button></dialog>}

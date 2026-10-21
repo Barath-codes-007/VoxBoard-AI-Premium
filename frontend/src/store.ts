@@ -7,3 +7,7 @@ export async function newLesson(): Promise<string> {
 export async function openLast(): Promise<string> {
   const r = await fetch("/api/lessons"); const l = r.ok ? await r.json() : []; return l[0]?.id ?? newLesson();
 }
+
+// Backend location. Empty in development (Vite proxies /api and /ws). On Render, set VITE_API_URL to the web service URL at build time.
+export const API_BASE: string = ((import.meta as any).env?.VITE_API_URL || "").replace(/\/$/, "");
+export const wsUrl = (path: string) => (API_BASE ? API_BASE.replace(/^http/, "ws") + path : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`);

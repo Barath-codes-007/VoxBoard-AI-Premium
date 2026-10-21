@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { wsUrl } from "./store";
 export default function Remote() {
   const [code, setCode] = useState(new URLSearchParams(location.hash.split("?")[1] || "").get("code") || "");
   const [on, setOn] = useState(false); const [msg, setMsg] = useState(""); const ws = useRef<WebSocket | null>(null);
   const send = (o: object) => ws.current?.readyState === 1 && ws.current.send(JSON.stringify(o));
   const connect = () => {
-    const w = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/${code}?role=remote`);
+    const w = new WebSocket(wsUrl(`/ws/${code}?role=remote`));
     w.onopen = () => { setOn(true); setMsg(""); }; w.onclose = () => { setOn(false); setMsg("Disconnected or invalid code."); }; ws.current = w;
   };
   useEffect(() => { if (code.length === 6 && !on) connect(); return () => ws.current?.close(); }, []);

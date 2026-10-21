@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 DB = os.environ.get("VOXBOARD_DB", "voxboard.db")
 app = FastAPI(title="VoxBoard AI")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()], allow_methods=["*"], allow_headers=["*"])
 
 def db():
     c = sqlite3.connect(DB)
