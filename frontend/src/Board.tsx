@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { ChevronLeft, Smartphone, Presentation, Mic, MicOff, Settings, MousePointer2, Hand, Pencil, Highlighter, Eraser, Type, Minus, ArrowUpRight, Square, Circle, Crosshair, Undo2, Redo2, ZoomIn, ZoomOut, Maximize, ImagePlus, FileUp, FileJson, Download, Palette, Copy, Trash2, Plus, Bold, Italic, AlignLeft, AlignCenter, AlignRight, List, ListOrdered, MoreHorizontal, Triangle, Diamond, Pentagon, Hexagon, Star, MoveHorizontal, RectangleHorizontal, PaintBucket, BringToFront, SendToBack, ArrowLeft, ArrowRight, Expand, RotateCcw, Sigma, X, ChevronUp } from "lucide-react";
+import { ChevronLeft, Smartphone, Presentation, Mic, MicOff, Settings, MousePointer2, Hand, Pencil, Highlighter, Eraser, Type, Minus, ArrowUpRight, Square, Circle, Crosshair, Undo2, Redo2, ZoomIn, ZoomOut, Maximize, ImagePlus, FileUp, FileJson, Download, Palette, Copy, Trash2, Plus, Bold, Italic, AlignLeft, AlignCenter, AlignRight, List, ListOrdered, MoreHorizontal, Triangle, Diamond, Pentagon, Hexagon, Star, MoveHorizontal, RectangleHorizontal, PaintBucket, BringToFront, SendToBack, ArrowLeft, ArrowRight, Expand, RotateCcw, Sigma, X, ChevronUp, RotateCw, Crop } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { pending, wsUrl } from "./store";
+import { wrapLines, applyList, flowText, imgCorners, rotHandle, imgHit, imgResize, cropApply, cropReset, center, rotPt, LH, ASC } from "./layout";
 import { jsPDF } from "jspdf";
 import { browserSpeech } from "./voice";
 import { makeQueue } from "./queue";
 
-type Obj = { k: "pen" | "hl" | "eraser" | "line" | "arrow" | "rect" | "ellipse" | "text" | "img" | "rrect" | "darrow" | "triangle" | "diamond" | "pentagon" | "hexagon" | "star" | "cross"; c: string; w: number; p: number[][]; text?: string; t0?: number; src?: string; b?: boolean; i?: boolean; f?: boolean; d?: boolean; a?: number; graph?: any };
+type Obj = { k: "pen" | "hl" | "eraser" | "line" | "arrow" | "rect" | "ellipse" | "text" | "img" | "rrect" | "darrow" | "triangle" | "diamond" | "pentagon" | "hexagon" | "star" | "cross"; c: string; w: number; p: number[][]; text?: string; t0?: number; src?: string; b?: boolean; i?: boolean; f?: boolean; d?: boolean; a?: number; graph?: any; bw?: number; tr?: boolean; fh?: number; rot?: number; crop?: number[] };
 type Page = { id: string; name: string; bg: string; objs: Obj[] };
 const prefs = (): any => { try { return JSON.parse(localStorage.getItem("vb") || "{}"); } catch { return {}; } };
 const np = (n: number): Page => ({ id: Math.random().toString(36).slice(2), name: "Page " + n, bg: prefs().bg || "white", objs: [] });
 const bgColor: Record<string, string> = { white: "#fff", black: "#111", grid: "#fff", ruled: "#fff", dots: "#fff" };
 const imgs: Record<string, HTMLImageElement> = {}; let onImg: () => void = () => {};
 const mctx = document.createElement("canvas").getContext("2d")!;
+const fontOf = (o: { i?: boolean; b?: boolean; w: number }) => `${o.i ? "italic " : ""}${o.b ? "bold " : ""}${o.w}px sans-serif`;
+const textLines = (o: { i?: boolean; b?: boolean; w: number; text?: string; bw?: number }) => { mctx.font = fontOf(o); return wrapLines(o.text || "", o.bw ?? Infinity, s => mctx.measureText(s).width); };
+const measureAt = (s: string, size: number) => { mctx.font = `${size}px sans-serif`; return mctx.measureText(s).width; };
+const natOf = (src?: string): [number, number] => { const im = src ? imgs[src] : undefined; return im && im.naturalWidth ? [im.naturalWidth, im.naturalHeight] : [1, 1]; };
 const SHAPES: [Obj["k"], LucideIcon, string][] = [["line", Minus, "Line"], ["arrow", ArrowUpRight, "Arrow"], ["darrow", MoveHorizontal, "Double arrow"], ["rect", Square, "Rectangle"], ["rrect", RectangleHorizontal, "Rounded rectangle"], ["ellipse", Circle, "Ellipse"], ["triangle", Triangle, "Triangle"], ["diamond", Diamond, "Diamond"], ["pentagon", Pentagon, "Pentagon"], ["hexagon", Hexagon, "Hexagon"], ["star", Star, "Star"], ["cross", Plus, "Cross"]];
 const KEYS: Record<string, Obj["k"] | "pan" | "laser" | "select"> = { v: "select", h: "pan", p: "pen", m: "hl", e: "eraser", t: "text", l: "line", a: "arrow", r: "rect", o: "ellipse", k: "laser" };
 const reg = (n: number, x0: number, y0: number, x1: number, y1: number) => Array.from({ length: n }, (_, i) => { const t = (2 * Math.PI * i) / n; return [(x0 + x1) / 2 + ((x1 - x0) / 2) * Math.sin(t), (y0 + y1) / 2 - ((y1 - y0) / 2) * Math.cos(t)]; });
@@ -26,8 +31,10 @@ const POLY: Record<string, (a: number, b: number, c: number, d: number) => numbe
 };
 const head = (ctx: CanvasRenderingContext2D, f: number[], t: number[], w: number) => { const g = Math.atan2(t[1] - f[1], t[0] - f[0]), L = 12 + w * 2; for (const s of [-0.5, 0.5]) { ctx.moveTo(t[0], t[1]); ctx.lineTo(t[0] - L * Math.cos(g + s), t[1] - L * Math.sin(g + s)); } };
 const corners = (b: number[]) => [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]];
+const hitObj = (o: Obj, p: number[]) => { if (o.k === "img") return imgHit(o, p[0], p[1]); const q = bbox(o); return p[0] >= q[0] && p[0] <= q[2] && p[1] >= q[1] && p[1] <= q[3]; };
 const bbox = (o: Obj): number[] => {
-  if (o.k === "text") { const x = o.p[0][0], y = o.p[0][1]; mctx.font = `${o.i ? "italic " : ""}${o.b ? "bold " : ""}${o.w}px sans-serif`; return [x, y - o.w, x + mctx.measureText(o.text || "").width, y + o.w * 0.25]; }
+  if (o.k === "text") { const x = o.p[0][0], y = o.p[0][1], L = textLines(o), lh = Math.round(o.w * LH); let mw = 0; mctx.font = fontOf(o); for (const l of L) mw = Math.max(mw, l.indent + mctx.measureText(l.text).width); const top = y - o.w * ASC; return [x, top, x + (o.bw ?? Math.max(mw, o.w * 0.6)), top + Math.max(1, L.length) * lh]; }
+  if (o.k === "img" && o.rot) { const cs = imgCorners(o), xs = cs.map(c => c[0]), ys = cs.map(c => c[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; }
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (const q of o.p) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
   const pad = o.w / 2 + 4; return [x0 - pad, y0 - pad, x1 + pad, y1 + pad];
 };
@@ -43,7 +50,7 @@ export default function Board({ lessonId }: { lessonId: string }) {
   const [pages, setPages] = useState<Page[]>([np(1)]); const [cur, setCur] = useState(0);
   const [tool, setTool] = useState<Obj["k"] | "pan" | "laser" | "select">("pen");
   const P = useMemo(prefs, []); const [color, setColor] = useState<string>(P.color || "#111111"); const [width, setWidth] = useState<number>(P.width || 4);
-  const [theme, setTheme] = useState<string>(P.theme || "auto"); const [modal, setModal] = useState(""); const [sel, setSel] = useState(-1); const [fill, setFill] = useState(false); const [dash, setDash] = useState(false); const [alpha, setAlpha] = useState(1);
+  const [theme, setTheme] = useState<string>(P.theme || "auto"); const [tsize, setTsize] = useState<number>(P.tsize || 36); const [tcolor, setTcolor] = useState<string>(P.tcolor || "#111111"); const [editIdx, setEditIdx] = useState(-1); const [editVal, setEditVal] = useState(""); const [cropMode, setCropMode] = useState(false); const [modal, setModal] = useState(""); const [sel, setSel] = useState(-1); const [fill, setFill] = useState(false); const [dash, setDash] = useState(false); const [alpha, setAlpha] = useState(1);
   const [zoom, setZoom] = useState(1); const [save, setSave] = useState("Saved");
   const [listening, setListening] = useState(false); const [interim, setInterim] = useState("");
   const [lang, setLang] = useState<string>(P.lang || "en-US"); const [speed, setSpeed] = useState<number>(P.speed || 40); const [anim, setAnim] = useState<boolean>(P.anim ?? true);
@@ -51,7 +58,7 @@ export default function Board({ lessonId }: { lessonId: string }) {
   const [transcript, setTranscript] = useState(""); const [present, setPresent] = useState(false);
   const cv = useRef<HTMLCanvasElement>(null); const draft = useRef<Obj | null>(null); const loaded = useRef(false);
   const selRef = useRef(-1); const dragRef = useRef<number[] | null>(null); const stage = useRef<HTMLDivElement>(null); const clip = useRef<Obj | null>(null);
-  const resizeRef = useRef<{ h: number; box: number[]; orig: Obj } | null>(null);
+  const resizeRef = useRef<{ h: number; box: number[]; orig: Obj } | null>(null); const cropRef = useRef<number[] | null>(null), cropDrag = useRef<any>(null);
   const hist = useRef<Page[][]>([]); const fut = useRef<Page[][]>([]); const skip = useRef(false); const prevPages = useRef(pages); const snapped = useRef(false);
   useEffect(() => {
     if (skip.current) skip.current = false;
@@ -61,10 +68,10 @@ export default function Board({ lessonId }: { lessonId: string }) {
     }
     prevPages.current = pages;
   }, [pages]);
-  useEffect(() => { localStorage.setItem("vb", JSON.stringify({ ...prefs(), color, width, lang, speed, anim, theme })); }, [color, width, lang, speed, anim, theme]);
+  useEffect(() => { localStorage.setItem("vb", JSON.stringify({ ...prefs(), color, width, lang, speed, anim, theme, tsize, tcolor })); }, [color, width, lang, speed, anim, theme, tsize, tcolor]);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => { selRef.current = -1; setSel(-1); }, [cur]);
-  const st = useRef({ pages, cur, color, width, tool, speed, anim, lang, fill, dash, alpha }); st.current = { pages, cur, color, width, tool, speed, anim, lang, fill, dash, alpha };
+  const st = useRef<any>({}); st.current = { pages, cur, color, width, tool, speed, anim, lang, fill, dash, alpha, tsize, tcolor, cropMode, editObj: editIdx >= 0 ? pages[cur]?.objs[editIdx] : null };
   const page = pages[cur]; const accept = useMemo(makeQueue, []);
 
   const mut = useCallback((f: (p: Page) => Page) => { setPages(ps => ps.map((p, i) => (i === st.current.cur ? f(p) : p))); setSave("Unsaved"); }, []);
@@ -90,12 +97,15 @@ export default function Board({ lessonId }: { lessonId: string }) {
       ctx.lineCap = ctx.lineJoin = "round"; ctx.lineWidth = o.w; ctx.strokeStyle = ctx.fillStyle = o.c; ctx.globalAlpha = o.k === "hl" ? 0.35 : (o.a ?? 1); ctx.setLineDash(o.d ? [o.w * 2 + 2, o.w * 2] : []);
       ctx.globalCompositeOperation = "source-over";
       if (o.k === "text") {
-        ctx.globalAlpha = 1; ctx.font = `${o.i ? "italic " : ""}${o.b ? "bold " : ""}${o.w}px sans-serif`;
-        let s = o.text || ""; if (o.t0 && st.current.anim) { const n = Math.floor(((performance.now() - o.t0) / 1000) * st.current.speed); if (n < s.length) { s = s.slice(0, n); animating = true; } }
-        ctx.fillText(s, o.p[0][0], o.p[0][1]); continue;
+        if (o === st.current.editObj) continue;
+        ctx.globalAlpha = 1; ctx.font = fontOf(o); const L = textLines(o), lh = Math.round(o.w * LH); let left = Infinity;
+        if (o.t0 && st.current.anim) { const n = Math.floor(((performance.now() - o.t0) / 1000) * st.current.speed), total = L.reduce((q, l) => q + l.text.length + 1, 0); if (n < total) { left = n; animating = true; } }
+        for (let i = 0; i < L.length && left > 0; i++) { ctx.fillText(left === Infinity ? L[i].text : L[i].text.slice(0, left), o.p[0][0] + L[i].indent, o.p[0][1] + i * lh); if (left !== Infinity) left -= L[i].text.length + 1; }
+        continue;
       }
       const [a, b] = [o.p[0], o.p[o.p.length - 1]];
-      if (o.k === "img") { ctx.globalAlpha = 1; let im = imgs[o.src!]; if (!im) { im = new Image(); im.onload = () => onImg(); im.src = o.src!; imgs[o.src!] = im; } if (im.complete && im.naturalWidth) ctx.drawImage(im, a[0], a[1], b[0] - a[0], b[1] - a[1]); continue; }
+      if (o.k === "img") { ctx.globalAlpha = 1; let im = imgs[o.src!]; if (!im) { im = new Image(); im.onload = () => onImg(); im.src = o.src!; imgs[o.src!] = im; }
+        if (im.complete && im.naturalWidth) { const [cx, cy] = center(o), hw = Math.abs(b[0] - a[0]) / 2, hh = Math.abs(b[1] - a[1]) / 2, cr = o.crop || [0, 0, 1, 1], nw = im.naturalWidth, nh = im.naturalHeight; ctx.save(); ctx.translate(cx, cy); ctx.rotate(o.rot || 0); ctx.drawImage(im, cr[0] * nw, cr[1] * nh, cr[2] * nw, cr[3] * nh, -hw, -hh, 2 * hw, 2 * hh); ctx.restore(); } continue; }
       ctx.beginPath();
       if (o.k === "pen" || o.k === "hl" || o.k === "eraser") { if (o.k === "eraser") { ctx.strokeStyle = bgColor[pg.bg] || pg.bg; } ctx.moveTo(a[0], a[1]); o.p.forEach(q => ctx.lineTo(q[0], q[1])); }
       else if (o.k === "line" || o.k === "arrow") { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); if (o.k === "arrow") { const g = Math.atan2(b[1] - a[1], b[0] - a[0]), L = 12 + o.w * 2; for (const s of [-0.5, 0.5]) { ctx.moveTo(b[0], b[1]); ctx.lineTo(b[0] - L * Math.cos(g + s), b[1] - L * Math.sin(g + s)); } } }
@@ -107,7 +117,11 @@ export default function Board({ lessonId }: { lessonId: string }) {
       if (o.f && !["pen", "hl", "eraser", "line", "arrow", "darrow"].includes(o.k)) { const ga = ctx.globalAlpha; ctx.globalAlpha = ga * 0.3; ctx.fill(); ctx.globalAlpha = ga; }
       ctx.stroke();
     }
-    if (showSel && selRef.current >= 0 && pg.objs[selRef.current]) { const q = bbox(pg.objs[selRef.current]); ctx.setLineDash([8, 6]); ctx.strokeStyle = "#0b6e6e"; ctx.lineWidth = 2; ctx.strokeRect(q[0], q[1], q[2] - q[0], q[3] - q[1]); ctx.setLineDash([]); ctx.fillStyle = "#fff"; for (const c of corners(q)) { ctx.fillRect(c[0] - 7, c[1] - 7, 14, 14); ctx.strokeRect(c[0] - 7, c[1] - 7, 14, 14); } }
+    if (showSel && selRef.current >= 0 && pg.objs[selRef.current]) { const so = pg.objs[selRef.current]; ctx.setLineDash([8, 6]); ctx.strokeStyle = "#0b6e6e"; ctx.lineWidth = 2;
+      if (so.k === "img") { const cs = imgCorners(so); ctx.beginPath(); ctx.moveTo(cs[0][0], cs[0][1]); ctx.lineTo(cs[1][0], cs[1][1]); ctx.lineTo(cs[3][0], cs[3][1]); ctx.lineTo(cs[2][0], cs[2][1]); ctx.closePath(); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = "#fff";
+        for (const c of cs) { ctx.fillRect(c[0] - 7, c[1] - 7, 14, 14); ctx.strokeRect(c[0] - 7, c[1] - 7, 14, 14); } const rh = rotHandle(so); ctx.beginPath(); ctx.moveTo((cs[0][0] + cs[1][0]) / 2, (cs[0][1] + cs[1][1]) / 2); ctx.lineTo(rh[0], rh[1]); ctx.stroke(); ctx.beginPath(); ctx.arc(rh[0], rh[1], 10, 0, 7); ctx.fill(); ctx.stroke();
+        const cr = cropRef.current; if (st.current.cropMode && cr) { const [cx, cy] = center(so), hw = Math.abs(so.p[1][0] - so.p[0][0]) / 2, hh = Math.abs(so.p[1][1] - so.p[0][1]) / 2; ctx.save(); ctx.translate(cx, cy); ctx.rotate(so.rot || 0); ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.beginPath(); ctx.rect(-hw, -hh, 2 * hw, 2 * hh); ctx.rect(cr[0], cr[1], cr[2] - cr[0], cr[3] - cr[1]); ctx.fill("evenodd"); ctx.strokeStyle = "#fff"; ctx.setLineDash([6, 4]); ctx.strokeRect(cr[0], cr[1], cr[2] - cr[0], cr[3] - cr[1]); ctx.setLineDash([]); ctx.fillStyle = "#0b6e6e"; for (const q of [[cr[0], cr[1]], [cr[2], cr[1]], [cr[0], cr[3]], [cr[2], cr[3]]]) ctx.fillRect(q[0] - 9, q[1] - 9, 18, 18); ctx.restore(); } }
+      else { const q = bbox(so); ctx.strokeRect(q[0], q[1], q[2] - q[0], q[3] - q[1]); ctx.setLineDash([]); ctx.fillStyle = "#fff"; for (const c of corners(q)) { ctx.fillRect(c[0] - 7, c[1] - 7, 14, 14); ctx.strokeRect(c[0] - 7, c[1] - 7, 14, 14); } } }
     ctx.globalAlpha = 1; return animating;
   }, []);
 
@@ -125,50 +139,62 @@ export default function Board({ lessonId }: { lessonId: string }) {
     if (present) return; const p = xy(e); const { tool: t, color: c, width: w, fill: fl, dash: ds, alpha: al } = st.current;
     if (t === "pan" || t === "laser") return;
     (e.target as Element).setPointerCapture(e.pointerId);
-    if (t === "select") { const objs = st.current.pages[st.current.cur].objs; const so = selRef.current >= 0 ? objs[selRef.current] : undefined; if (so) { const bx = bbox(so); const hi = corners(bx).findIndex(c => Math.abs(p[0] - c[0]) < 16 && Math.abs(p[1] - c[1]) < 16); if (hi >= 0) { resizeRef.current = { h: hi, box: bx, orig: so }; return; } } let h = -1; for (let i = objs.length - 1; i >= 0; i--) { const q = bbox(objs[i]); if (p[0] >= q[0] && p[0] <= q[2] && p[1] >= q[1] && p[1] <= q[3]) { h = i; break; } } selRef.current = h; setSel(h); dragRef.current = h >= 0 ? p : null; redraw(); return; }
-    if (t === "text") { const s = prompt("Text:"); if (s) { mut(pg => ({ ...pg, objs: [...pg.objs, { k: "text", c, w: w * 5, p: [p], text: s }] })); } return; }
+    if (t === "select") { const objs = st.current.pages[st.current.cur].objs; const so = selRef.current >= 0 ? objs[selRef.current] : undefined;
+      if (so?.k === "img") {
+        if (st.current.cropMode && cropRef.current) { const [cx, cy] = center(so), u = rotPt(p[0], p[1], cx, cy, -(so.rot || 0)), lx = u[0] - cx, ly = u[1] - cy, r = cropRef.current, hi2 = [[r[0], r[1]], [r[2], r[1]], [r[0], r[3]], [r[2], r[3]]].findIndex(q => Math.hypot(lx - q[0], ly - q[1]) < 20);
+          if (hi2 >= 0) { cropDrag.current = { h: hi2 }; return; } if (lx > r[0] && lx < r[2] && ly > r[1] && ly < r[3]) { cropDrag.current = { m: [lx, ly] }; return; } }
+        const cs = imgCorners(so), hi = cs.findIndex(c => Math.hypot(p[0] - c[0], p[1] - c[1]) < 18); if (hi >= 0) { resizeRef.current = { h: hi, box: [], orig: so }; return; }
+        const rh = rotHandle(so); if (Math.hypot(p[0] - rh[0], p[1] - rh[1]) < 20) { resizeRef.current = { h: 4, box: [], orig: so }; return; }
+      } else if (so) { const bx = bbox(so); const hi = corners(bx).findIndex(c => Math.abs(p[0] - c[0]) < 16 && Math.abs(p[1] - c[1]) < 16); if (hi >= 0) { resizeRef.current = { h: hi, box: bx, orig: so }; return; } }
+      let h = -1; for (let i = objs.length - 1; i >= 0; i--) { if (hitObj(objs[i], p)) { h = i; break; } } selRef.current = h; setSel(h); dragRef.current = h >= 0 ? p : null; redraw(); return; }
+    if (t === "text") { const objs = st.current.pages[st.current.cur].objs; for (let i = objs.length - 1; i >= 0; i--) if (objs[i].k === "text" && hitObj(objs[i], p)) { startEdit(i); return; }
+      const sz = st.current.tsize, n = objs.length; mut(pg => ({ ...pg, objs: [...pg.objs, { k: "text", c: st.current.tcolor, w: sz, p: [[p[0], p[1] + sz * ASC]], text: "", bw: Math.max(160, Math.min(520, 1580 - p[0])) }] })); setEditIdx(n); setEditVal(""); return; }
     draft.current = { k: t, c, w: t === "hl" ? w * 3 : t === "eraser" ? w * 4 : w, p: [p], f: fl, d: ds, a: t === "eraser" ? undefined : al }; redraw();
   };
   const onMove = (e: React.PointerEvent) => {
     const t = st.current.tool;
     if (t === "pan" && e.buttons) { stage.current!.scrollLeft -= e.movementX; stage.current!.scrollTop -= e.movementY; return; }
     if (t === "laser" || present) { const p = xy(e); redraw(); const x = cv.current!.getContext("2d")!; x.fillStyle = "rgba(255,0,0,.85)"; x.beginPath(); x.arc(p[0], p[1], 14, 0, 7); x.fill(); return; }
+    if (cropDrag.current && cropRef.current && selRef.current >= 0) { const so = st.current.pages[st.current.cur].objs[selRef.current]; if (so) { const p = xy(e), [cx, cy] = center(so), u = rotPt(p[0], p[1], cx, cy, -(so.rot || 0)), lx = u[0] - cx, ly = u[1] - cy, hw = Math.abs(so.p[1][0] - so.p[0][0]) / 2, hh = Math.abs(so.p[1][1] - so.p[0][1]) / 2, r = cropRef.current, d = cropDrag.current, cl = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+        if (d.h !== undefined) { if (d.h % 2 === 0) r[0] = cl(lx, -hw, r[2] - 20); else r[2] = cl(lx, r[0] + 20, hw); if (d.h < 2) r[1] = cl(ly, -hh, r[3] - 20); else r[3] = cl(ly, r[1] + 20, hh); } else { const dx = cl(lx - d.m[0], -hw - r[0], hw - r[2]), dy = cl(ly - d.m[1], -hh - r[1], hh - r[3]); r[0] += dx; r[2] += dx; r[1] += dy; r[3] += dy; d.m = [lx, ly]; } redraw(); } return; }
+    if (resizeRef.current && resizeRef.current.orig.k === "img" && selRef.current >= 0) { const p = xy(e), rr = resizeRef.current, i = selRef.current; let nx: Obj;
+      if (rr.h === 4) { const [cx, cy] = center(rr.orig); let ang = Math.atan2(p[1] - cy, p[0] - cx) + Math.PI / 2; const q = Math.round(ang / (Math.PI / 2)) * (Math.PI / 2); if (Math.abs(ang - q) < 0.07) ang = q; nx = { ...rr.orig, rot: ang }; } else nx = { ...rr.orig, p: imgResize(rr.orig, rr.h, p) };
+      setPages(ps => ps.map((pg, j) => j === st.current.cur ? { ...pg, objs: pg.objs.map((o, k) => k === i ? nx : o) } : pg)); setSave("Unsaved"); return; }
     if (resizeRef.current && selRef.current >= 0) {
       const p = xy(e), { h, box, orig } = resizeRef.current, i = selRef.current;
       const cx = h % 2 ? box[2] : box[0], cy = h < 2 ? box[1] : box[3], ax = h % 2 ? box[0] : box[2], ay = h < 2 ? box[3] : box[1];
       const sx = Math.max(0.05, (p[0] - ax) / ((cx - ax) || 1)), sy = Math.max(0.05, (p[1] - ay) / ((cy - ay) || 1));
-      const nx = orig.k === "text" ? { ...orig, w: Math.max(8, Math.round(orig.w * sy)), p: [[ax + (orig.p[0][0] - ax) * sy, ay + (orig.p[0][1] - ay) * sy]] } : { ...orig, p: orig.p.map(q => [ax + (q[0] - ax) * sx, ay + (q[1] - ay) * sy]) };
+      const nx = orig.k === "text" ? { ...orig, bw: Math.max(80, Math.abs(p[0] - ax)), p: [[Math.min(ax, p[0]), orig.p[0][1]]] } : { ...orig, p: orig.p.map(q => [ax + (q[0] - ax) * sx, ay + (q[1] - ay) * sy]) };
       setPages(ps => ps.map((pg, j) => j === st.current.cur ? { ...pg, objs: pg.objs.map((o, k) => k === i ? nx : o) } : pg)); setSave("Unsaved"); return;
     }
     if (dragRef.current && selRef.current >= 0) { const p = xy(e); const dx = p[0] - dragRef.current[0], dy = p[1] - dragRef.current[1], i = selRef.current; dragRef.current = p; setPages(ps => ps.map((pg, j) => j === st.current.cur ? { ...pg, objs: pg.objs.map((o, k) => k === i ? { ...o, p: o.p.map(q => [q[0] + dx, q[1] + dy]) } : o) } : pg)); setSave("Unsaved"); return; }
     if (!draft.current) return; const p = xy(e); const d = draft.current; if (["pen", "hl", "eraser"].includes(d.k)) d.p.push(p); else d.p[1] = p; redraw(); requestAnimationFrame(redraw); };
-  const onUp = () => { if (resizeRef.current || dragRef.current) { resizeRef.current = null; dragRef.current = null; snapped.current = false; return; } const d = draft.current; draft.current = null; if (d) { mut(pg => ({ ...pg, objs: [...pg.objs, d] })); } };
+  const onUp = () => { if (cropDrag.current) { cropDrag.current = null; return; } if (resizeRef.current || dragRef.current) { resizeRef.current = null; dragRef.current = null; snapped.current = false; return; } const d = draft.current; draft.current = null; if (d) { mut(pg => ({ ...pg, objs: [...pg.objs, d] })); } };
 
   const undo = () => { const h = hist.current.pop(); if (!h) return; fut.current.push(st.current.pages); skip.current = true; setPages(h); setCur(c => Math.min(c, h.length - 1)); setSave("Unsaved"); };
   const redoF = () => { const h = fut.current.pop(); if (!h) return; hist.current.push(st.current.pages); skip.current = true; setPages(h); setCur(c => Math.min(c, h.length - 1)); setSave("Unsaved"); };
   const addText = useCallback((s: string) => {
-    mut(pg => { const n = pg.objs.filter(o => o.k === "text").length; const size = 36; const perCol = 20; const x = 60 + Math.floor(n / perCol) * 520; const y = 70 + (n % perCol) * 44;
-      return { ...pg, objs: [...pg.objs, { k: "text", c: st.current.color, w: size, p: [[x, y]], text: s, t0: performance.now() }] }; });
-    setTranscript(t => t + s + "\n");
-  }, [mut]);
+    const S = st.current, r = flowText(S.pages, S.cur, s, { size: S.tsize, color: S.tcolor, measure: measureAt, newPage: n => np(n), W: 1600, H: 900, margin: 60, t0: performance.now() });
+    st.current.pages = r.pages; st.current.cur = r.cur; setPages(r.pages); setCur(r.cur); setSave("Unsaved"); setTranscript(t => t + s + "\n");
+  }, []);
 
   const speech = useMemo(() => browserSpeech(setInterim, t => { const p = accept(t); if (p) addText(p); setInterim(""); }, m => { setErr(m); setVerr(true); setListening(false); }, () => setListening(false)), [accept, addText]);
   const toggleListen = () => { if (listening) { speech.stop(); setListening(false); } else { setErr(""); setVerr(false); speech.start(st.current.lang); setListening(true); } };
 
   const delSel = () => { if (sel < 0) return; const i = sel; mut(pg => ({ ...pg, objs: pg.objs.filter((_, k) => k !== i) })); selRef.current = -1; setSel(-1); };
   const dup = () => { const o = page.objs[sel]; if (!o) return; const c = { ...o, p: o.p.map(q => [q[0] + 30, q[1] + 30]), t0: undefined }; const n = page.objs.length; mut(pg => ({ ...pg, objs: [...pg.objs, c] })); selRef.current = n; setSel(n); };
-  const scaleSel = (f: number) => { const i = sel; if (i < 0) return; mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => { if (k !== i) return o; if (o.k === "text") return { ...o, w: Math.round(o.w * f) }; const a = o.p[0]; return { ...o, p: o.p.map(q => [a[0] + (q[0] - a[0]) * f, a[1] + (q[1] - a[1]) * f]) }; }) })); };
+  const scaleSel = (f: number) => { const i = sel; if (i < 0) return; mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => { if (k !== i) return o; if (o.k === "text") return { ...o, w: Math.round(o.w * f) }; const a = o.k === "img" ? center(o) : o.p[0]; return { ...o, p: o.p.map(q => [a[0] + (q[0] - a[0]) * f, a[1] + (q[1] - a[1]) * f]) }; }) })); };
   const fmt = (key: "b" | "i") => { if (sel < 0 || page.objs[sel]?.k !== "text") return; mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => k !== sel ? o : key === "b" ? { ...o, b: !o.b } : { ...o, i: !o.i }) })); };
-  const addList = (num: boolean) => { const s = prompt("List items, separated by ;"); if (!s) return; s.split(";").map(x => x.trim()).filter(Boolean).forEach((t, i) => addText((num ? `${i + 1}. ` : "\u2022 ") + t)); };
+  const addList = (num: boolean) => toggleList(num ? "n" : "b");
   const alignSel = (a: "left" | "center" | "right") => { const o = page.objs[sel]; if (!o || o.k !== "text") return; const q = bbox(o), wd = q[2] - q[0]; const x = a === "left" ? 60 : a === "center" ? (1600 - wd) / 2 : 1540 - wd; mut(pg => ({ ...pg, objs: pg.objs.map((z, k) => k === sel ? { ...z, p: [[x, z.p[0][1]]] } : z) })); };
   const mvPage = (d: number) => { const j = cur + d; if (j < 0 || j >= pages.length) return; setPages(ps => { const n = [...ps]; [n[cur], n[j]] = [n[j], n[cur]]; return n; }); setCur(j); setSave("Unsaved"); };
-  const editText = (e: React.MouseEvent) => { const r = cv.current!.getBoundingClientRect(); const x = ((e.clientX - r.left) / r.width) * 1600, y = ((e.clientY - r.top) / r.height) * 900; for (let i = page.objs.length - 1; i >= 0; i--) { const o = page.objs[i], q = bbox(o); if (o.k === "text" && x >= q[0] && x <= q[2] && y >= q[1] && y <= q[3]) { const s = prompt("Edit text", o.text); if (s !== null) mut(pg => ({ ...pg, objs: pg.objs.map((z, k) => k === i ? { ...z, text: s, t0: undefined } : z) })); return; } } };
+  const editText = (e: React.MouseEvent) => { const rc = cv.current!.getBoundingClientRect(), p = [((e.clientX - rc.left) / rc.width) * 1600, ((e.clientY - rc.top) / rc.height) * 900]; for (let i = page.objs.length - 1; i >= 0; i--) if (page.objs[i].k === "text" && hitObj(page.objs[i], p)) { startEdit(i); return; } };
   const addImg = async (f?: File) => {
-    if (!f) return; if (!f.type.startsWith("image/") || f.size > 25e6) { setErr("Choose an image under 25 MB (PNG, JPG, WebP, GIF or SVG)."); return; }
+    if (!f) return; if (!f.type.startsWith("image/")) { setErr("Please choose an image file (PNG, JPG, WebP, GIF or SVG)."); return; }
     setBusy("Adding image…");
     try {
       const url = URL.createObjectURL(f); const im = new Image(); im.src = url; await im.decode(); if (!im.naturalWidth) throw 0;
-      const sc = Math.min(1, 4096 / Math.max(im.naturalWidth, im.naturalHeight)); const c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * sc); c.height = Math.round(im.naturalHeight * sc);
+      const sc = Math.min(1, 6000 / Math.max(im.naturalWidth, im.naturalHeight)); const c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * sc); c.height = Math.round(im.naturalHeight * sc);
       c.getContext("2d")!.drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
       const src = c.toDataURL(f.type === "image/jpeg" ? "image/jpeg" : "image/png", 0.95);
       const k = Math.min(1100 / c.width, 650 / c.height, 1), w = c.width * k, h = c.height * k, x = (1600 - w) / 2, y = (900 - h) / 2;
@@ -177,22 +203,21 @@ export default function Board({ lessonId }: { lessonId: string }) {
   };
   const importJson = async (f?: File) => { if (!f) return; try { const d = JSON.parse(await f.text()); if (!Array.isArray(d.pages) || !d.pages.length) throw 0; setPages(d.pages); setCur(0); setTranscript(d.transcript || ""); if (d.title) setTitle(d.title); setSave("Unsaved"); } catch { setErr("That file is not a VoxBoard JSON export."); } };
   const importPdf = async (f?: File) => {
-    if (!f) return; if (f.size > 100e6) { setErr("PDF is larger than 100 MB."); return; }
+    if (!f) return;
     try {
       setBusy("Opening PDF…");
       const pdfjs = await import("pdfjs-dist"); pdfjs.GlobalWorkerOptions.workerSrc = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
-      const doc = await pdfjs.getDocument({ data: await f.arrayBuffer() }).promise; const n = Math.min(doc.numPages, 150); const add: Page[] = [];
+      const doc = await pdfjs.getDocument({ data: await f.arrayBuffer() }).promise; const n = doc.numPages, q = n <= 30 ? 2 : n <= 120 ? 1.5 : 1, jq = n <= 120 ? 0.92 : 0.85; const add: Page[] = [];
       for (let i = 1; i <= n; i++) {
         setBusy(`Importing page ${i} of ${n}…`);
-        const pg = await doc.getPage(i); const v1 = pg.getViewport({ scale: 1 }); const vp = pg.getViewport({ scale: Math.min(1600 / v1.width, 900 / v1.height) * 2 });
+        const pg = await doc.getPage(i); const v1 = pg.getViewport({ scale: 1 }); const vp = pg.getViewport({ scale: Math.min(1600 / v1.width, 900 / v1.height) * q });
         const c = document.createElement("canvas"); c.width = Math.round(vp.width); c.height = Math.round(vp.height); await pg.render({ canvasContext: c.getContext("2d")!, viewport: vp }).promise;
-        const w = vp.width / 2, h = vp.height / 2;
-        add.push({ ...np(i), name: `${f.name.slice(0, 14)} p${i}`, objs: [{ k: "img", c: "#000", w: 1, src: c.toDataURL("image/jpeg", 0.92), p: [[(1600 - w) / 2, (900 - h) / 2], [(1600 + w) / 2, (900 + h) / 2]] }] });
+        const w = vp.width / q, h = vp.height / q;
+        add.push({ ...np(i), name: `${f.name.slice(0, 14)} p${i}`, objs: [{ k: "img", c: "#000", w: 1, src: c.toDataURL("image/jpeg", jq), p: [[(1600 - w) / 2, (900 - h) / 2], [(1600 + w) / 2, (900 + h) / 2]] }] });
         c.width = c.height = 0;
       }
       const blank = pages.length === 1 && pages[0].objs.length === 0;
       setPages(ps => ps.length === 1 && ps[0].objs.length === 0 ? add : [...ps, ...add]); setCur(blank ? 0 : pages.length); setSave("Unsaved");
-      if (doc.numPages > n) setErr(`Imported the first ${n} of ${doc.numPages} pages.`);
     } catch { setErr("Could not read that PDF."); } finally { setBusy(""); }
   };
   useEffect(() => { if (pending.pdf) { const f = pending.pdf; pending.pdf = undefined; importPdf(f); } }, []);
@@ -238,11 +263,37 @@ export default function Board({ lessonId }: { lessonId: string }) {
   const layer = (d: 1 | -1) => { if (sel < 0) return; const o = page.objs[sel]; mut(pg => ({ ...pg, objs: d > 0 ? [...pg.objs.filter((_, i) => i !== sel), o] : [o, ...pg.objs.filter((_, i) => i !== sel)] })); const n = d > 0 ? page.objs.length - 1 : 0; selRef.current = n; setSel(n); };
   const shapeCur = SHAPES.find(x => x[0] === tool);
   useEffect(() => { const f = (e: ClipboardEvent) => { const im = Array.from(e.clipboardData?.files || []).find(x => x.type.startsWith("image/")); if (im) { e.preventDefault(); addImg(im); } }; addEventListener("paste", f); return () => removeEventListener("paste", f); });
-  const fit = () => { const s = stage.current; if (s) setZoom(Math.max(0.3, Math.min(1, ((s.clientHeight - 32) * 16 / 9) / Math.max(1, s.clientWidth - 32)))); };
+  const fit = () => { const s = stage.current; if (!s) return; const cs = getComputedStyle(s), px = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight), py = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom); setZoom(Math.max(0.3, Math.min(1, ((s.clientHeight - py) * 16 / 9) / Math.max(1, s.clientWidth - px)))); };
   useEffect(() => { const t = setTimeout(fit, 60); addEventListener("resize", fit); return () => { clearTimeout(t); removeEventListener("resize", fit); }; }, [present, dock, focus]);
-  const Ib = (icon: React.ReactNode, label: string, on: boolean, fn: () => void) => <button key={label} className={"ib" + (on ? " on" : "")} data-tip={label} aria-label={label} aria-pressed={on || undefined} onClick={fn}>{icon}</button>;
+  const Ib = (icon: React.ReactNode, label: string, on: boolean, fn: () => void) => <button key={label} className={"ib" + (on ? " on" : "")} data-tip={label} aria-label={label} aria-pressed={on || undefined} onMouseDown={e => e.preventDefault()} onClick={fn}>{icon}</button>;
   const tl = (k: typeof tool, I: LucideIcon, l: string) => Ib(<I size={18} />, l, tool === k, () => setTool(k));
   const so2 = sel >= 0 ? page.objs[sel] : undefined;
+  const startEdit = (i: number) => { const o = st.current.pages[st.current.cur].objs[i]; if (!o || o.k !== "text") return; selRef.current = -1; setSel(-1); setEditIdx(i); setEditVal(o.text || ""); };
+  const commitEdit = () => { const i = editIdx; if (i < 0) return; const o = page.objs[i]; setEditIdx(-1); if (!o) return; const v = editVal.replace(/\s+$/, "");
+    if (v === "") { mut(pg => ({ ...pg, objs: pg.objs.filter((_, k) => k !== i) })); return; } if (v !== (o.text || "")) mut(pg => ({ ...pg, objs: pg.objs.map((z, k) => (k === i ? { ...z, text: v, t0: undefined } : z)) })); selRef.current = i; setSel(i); };
+  const onEditKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape" || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) { e.preventDefault(); commitEdit(); return; }
+    if (e.key !== "Enter" || e.shiftKey) return; const ta = e.currentTarget, pos = ta.selectionStart, before = ta.value.slice(0, pos), line = before.slice(before.lastIndexOf("\n") + 1), m = /^(•|(\d+)\.)\s/.exec(line); if (!m) return; e.preventDefault();
+    if (line.trim() === m[0].trim()) { const nv = ta.value.slice(0, pos - line.length) + ta.value.slice(pos); setEditVal(nv); setTimeout(() => ta.setSelectionRange(pos - line.length, pos - line.length)); return; }
+    const next = m[2] ? `${+m[2] + 1}. ` : "• ", nv = before + "\n" + next + ta.value.slice(pos); setEditVal(nv); setTimeout(() => ta.setSelectionRange(pos + 1 + next.length, pos + 1 + next.length));
+  };
+  const toggleList = (kind: "b" | "n") => {
+    if (editIdx >= 0) { const ta = document.querySelector<HTMLTextAreaElement>(".tbox"), s0 = ta?.selectionStart ?? editVal.length, s1 = ta?.selectionEnd ?? s0, rs = applyList(editVal, s0, s1, kind); setEditVal(rs.text); setTimeout(() => { const t2 = document.querySelector<HTMLTextAreaElement>(".tbox"); if (t2) { t2.focus(); t2.setSelectionRange(rs.s0, rs.s1); } }); return; }
+    const o = sel >= 0 ? page.objs[sel] : undefined; if (o?.k === "text") { const rs = applyList(o.text || "", 0, (o.text || "").length, kind); mut(pg => ({ ...pg, objs: pg.objs.map((z, k) => (k === sel ? { ...z, text: rs.text, t0: undefined } : z)) })); return; }
+    const n = page.objs.length, init = kind === "b" ? "• " : "1. "; mut(pg => ({ ...pg, objs: [...pg.objs, { k: "text", c: tcolor, w: tsize, p: [[80, 140 + tsize * ASC]], text: init, bw: 700 }] })); setEditIdx(n); setEditVal(init);
+  };
+  const setTextSize = (n: number) => { setTsize(n); const i = editIdx >= 0 ? editIdx : sel; if (i >= 0 && page.objs[i]?.k === "text") mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => (k === i ? { ...o, w: n } : o)) })); };
+  const pickTextColor = (c: string) => { setTcolor(c); const i = editIdx >= 0 ? editIdx : sel; if (i >= 0 && page.objs[i]?.k === "text") mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => (k === i ? { ...o, c } : o)) })); };
+  const rotSel = (deg: number) => { const i = sel; if (page.objs[i]?.k !== "img") return; mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => (k === i ? { ...o, rot: (o.rot || 0) + (deg * Math.PI) / 180 } : o)) })); };
+  const setRot = (deg: number) => { const i = sel; if (page.objs[i]?.k !== "img") return; mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => (k === i ? { ...o, rot: (deg * Math.PI) / 180 } : o)) })); };
+  const fitImg = () => { const i = sel, o = page.objs[i]; if (o?.k !== "img") return; const cs = imgCorners(o), xs = cs.map(c => c[0]), ys = cs.map(c => c[1]), k = Math.min(1560 / Math.max(1, Math.max(...xs) - Math.min(...xs)), 860 / Math.max(1, Math.max(...ys) - Math.min(...ys))), hw = (Math.abs(o.p[1][0] - o.p[0][0]) / 2) * k, hh = (Math.abs(o.p[1][1] - o.p[0][1]) / 2) * k; mut(pg => ({ ...pg, objs: pg.objs.map((z, j) => (j === i ? { ...z, p: [[800 - hw, 450 - hh], [800 + hw, 450 + hh]] } : z)) })); };
+  const cancelCrop = () => { setCropMode(false); cropRef.current = null; setTimeout(redraw); };
+  const toggleCrop = () => { if (cropMode) { cancelCrop(); return; } const o = page.objs[sel]; if (o?.k !== "img") return; const hw = Math.abs(o.p[1][0] - o.p[0][0]) / 2, hh = Math.abs(o.p[1][1] - o.p[0][1]) / 2; cropRef.current = [-hw, -hh, hw, hh]; setCropMode(true); setTimeout(redraw); };
+  const applyCrop = () => { const i = sel, o = page.objs[i], rc = cropRef.current; if (o?.k !== "img" || !rc) return; const res = cropApply(o, rc); mut(pg => ({ ...pg, objs: pg.objs.map((z, k) => (k === i ? { ...z, p: res.p, crop: res.crop } : z)) })); cancelCrop(); };
+  const resetCrop = () => { const i = sel, o = page.objs[i]; if (o?.k !== "img") return; const [nw, nh] = natOf(o.src), res = cropReset(o, nw, nh); mut(pg => ({ ...pg, objs: pg.objs.map((z, k) => (k === i ? { ...z, p: res.p, crop: undefined } : z)) })); };
+  useEffect(() => { setCropMode(false); cropRef.current = null; }, [sel, cur]);
+  useEffect(() => { const c = cv.current!; const w = (e: WheelEvent) => { const i = selRef.current, o = st.current.pages[st.current.cur].objs[i]; if (!o || o.k !== "img" || st.current.tool !== "select") return; const rc = c.getBoundingClientRect(); if (!imgHit(o, ((e.clientX - rc.left) / rc.width) * 1600, ((e.clientY - rc.top) / rc.height) * 900)) return; e.preventDefault(); const f = Math.exp(-e.deltaY * 0.0015), [cx, cy] = center(o); setPages(ps => ps.map((pg, j) => (j === st.current.cur ? { ...pg, objs: pg.objs.map((z, k) => (k === i ? { ...z, p: z.p.map(q => [cx + (q[0] - cx) * f, cy + (q[1] - cy) * f]) } : z)) } : pg))); setSave("Unsaved"); }; c.addEventListener("wheel", w, { passive: false }); return () => c.removeEventListener("wheel", w); }, []);
+  const stageStyle: React.CSSProperties | undefined = focus || present ? { padding: 0, background: bgColor[page.bg] || page.bg, display: "flex", alignItems: "center", justifyContent: "center" } : undefined;
   const pickColor = (c: string) => { setColor(c); if (sel >= 0) mut(pg => ({ ...pg, objs: pg.objs.map((o, k) => k === sel ? { ...o, c } : o) })); };
   const vs = verr && !listening ? "error" : listening ? (interim ? "hearing" : "listening") : "idle";
   const vl: Record<string, string> = { idle: "Ready", listening: "Listening", hearing: "Hearing speech", error: "Needs attention" };
@@ -282,15 +333,20 @@ export default function Board({ lessonId }: { lessonId: string }) {
         <label>Thickness {width}<input type="range" min={1} max={60} value={width} onChange={e => setWidth(+e.target.value)} /></label>
         <label>Opacity {Math.round(alpha * 100)}%<input type="range" min={10} max={100} value={Math.round(alpha * 100)} onChange={e => setProp("a", +e.target.value / 100)} /></label>
         {Ib(<PaintBucket size={18} />, "Fill shapes", fill, () => setProp("f", !fill))}{Ib(<MoreHorizontal size={18} />, "Dashed lines", dash, () => setProp("d", !dash))}
+        <label>Text {tsize}<input type="range" min={12} max={120} value={tsize} onChange={e => setTextSize(+e.target.value)} /></label><input type="color" value={tcolor} onChange={e => pickTextColor(e.target.value)} aria-label="Text colour" />
         <label>Background<select value={page.bg} onChange={e => mut(pg => ({ ...pg, bg: e.target.value }))}>{["white", "black", "grid", "ruled", "dots"].map(b => <option key={b}>{b}</option>)}</select></label>
         <label className="ib" data-tip="Custom background colour"><Palette size={18} /><input className="sr" type="color" aria-label="Custom background colour" onChange={e => mut(pg => ({ ...pg, bg: e.target.value }))} /></label>
-        {so2 && <div className="grp" style={{ border: 0 }}>{Ib(<Copy size={18} />, "Duplicate", false, dup)}{so2.graph && Ib(<Sigma size={18} />, "Edit graph", false, editGraph)}{Ib(<Trash2 size={18} />, "Delete", false, delSel)}{Ib(<BringToFront size={18} />, "Bring to front", false, () => layer(1))}{Ib(<SendToBack size={18} />, "Send to back", false, () => layer(-1))}{Ib(<Plus size={18} />, "Bigger", false, () => scaleSel(1.2))}{Ib(<Minus size={18} />, "Smaller", false, () => scaleSel(1 / 1.2))}
+        {so2 && <div className="grp" style={{ border: 0 }}>{Ib(<Copy size={18} />, "Duplicate", false, dup)}{so2.k === "img" && <>{Ib(<RotateCcw size={18} />, "Rotate left 90°", false, () => rotSel(-90))}{Ib(<RotateCw size={18} />, "Rotate right 90°", false, () => rotSel(90))}{Ib(<ZoomOut size={18} />, "Zoom out", false, () => scaleSel(1 / 1.2))}{Ib(<ZoomIn size={18} />, "Zoom in", false, () => scaleSel(1.2))}{Ib(<Maximize size={18} />, "Fit image to board", false, fitImg)}{Ib(<Crop size={18} />, cropMode ? "Cancel crop" : "Crop", cropMode, toggleCrop)}{cropMode && <button className="sm primary" onClick={applyCrop}>Apply crop</button>}{so2.crop && Ib(<Undo2 size={18} />, "Reset crop", false, resetCrop)}<label className="row">Angle {Math.round(((so2.rot || 0) * 180) / Math.PI)}°<input type="range" min={-180} max={180} value={Math.round(((so2.rot || 0) * 180) / Math.PI)} onChange={e => setRot(+e.target.value)} /></label></>}{so2.graph && Ib(<Sigma size={18} />, "Edit graph", false, editGraph)}{Ib(<Trash2 size={18} />, "Delete", false, delSel)}{Ib(<BringToFront size={18} />, "Bring to front", false, () => layer(1))}{Ib(<SendToBack size={18} />, "Send to back", false, () => layer(-1))}{Ib(<Plus size={18} />, "Bigger", false, () => scaleSel(1.2))}{Ib(<Minus size={18} />, "Smaller", false, () => scaleSel(1 / 1.2))}
           {so2.k === "text" && <>{Ib(<Bold size={18} />, "Bold", !!so2.b, () => fmt("b"))}{Ib(<Italic size={18} />, "Italic", !!so2.i, () => fmt("i"))}{Ib(<AlignLeft size={18} />, "Align left", false, () => alignSel("left"))}{Ib(<AlignCenter size={18} />, "Align centre", false, () => alignSel("center"))}{Ib(<AlignRight size={18} />, "Align right", false, () => alignSel("right"))}</>}</div>}
-        {!so2 && <span>{Ib(<List size={18} />, "Bulleted list", false, () => addList(false))}{Ib(<ListOrdered size={18} />, "Numbered list", false, () => addList(true))}</span>}
+        <span>{Ib(<List size={18} />, "Bulleted list", false, () => addList(false))}{Ib(<ListOrdered size={18} />, "Numbered list", false, () => addList(true))}</span>
       </div>}
       {err && <div className="err bar" onClick={() => setErr("")}>{err}</div>}
       {busy && <div className="toast" role="status">{busy}</div>}
-      <div className="main"><div className="stage" ref={stage} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); for (const f of Array.from(e.dataTransfer.files as FileList)) { if (f.type.startsWith("image/")) addImg(f); else if (f.type === "application/pdf") importPdf(f); else if (f.name.endsWith(".json")) importJson(f); } }}><canvas ref={cv} onDoubleClick={editText} onPointerLeave={() => redraw()} style={{ width: `${zoom * 100}%`, touchAction: "none", cursor: tool === "laser" ? "crosshair" : "default" }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} /></div>
+      <div className="main"><div className="stage" ref={stage} style={stageStyle} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); for (const f of Array.from(e.dataTransfer.files as FileList)) { if (f.type.startsWith("image/")) addImg(f); else if (f.type === "application/pdf") importPdf(f); else if (f.name.endsWith(".json")) importJson(f); } }}><div className="cwrap" style={{ width: `${zoom * 100}%` }}><canvas ref={cv} onDoubleClick={editText} onPointerLeave={() => redraw()} style={{ width: "100%", touchAction: "none", cursor: tool === "laser" ? "crosshair" : tool === "text" ? "text" : "default" }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />
+        {editIdx >= 0 && page.objs[editIdx]?.k === "text" && (() => { const o = page.objs[editIdx], sc = (cv.current?.clientWidth || 1600) / 1600, lh = Math.round(o.w * LH);
+          return <textarea className="tbox" autoFocus value={editVal} aria-label="Text box" onChange={e => setEditVal(e.target.value)} onBlur={commitEdit} onKeyDown={onEditKey} onFocus={e => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length)}
+            style={{ left: o.p[0][0] * sc, top: (o.p[0][1] - o.w * ASC) * sc, width: (o.bw ?? 520) * sc, minHeight: lh * sc, fontSize: o.w * sc, lineHeight: `${lh * sc}px`, color: o.c, fontWeight: o.b ? 700 : 400, fontStyle: o.i ? "italic" : "normal" }}
+            ref={el => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }} />; })()}</div></div>
       {!present && !focus && dock && <aside className="dock" aria-label="Voice and transcript">
         <section className={"voice " + vs}>
           <div className="vhead"><button className={"mic" + (listening ? " live" : "")} onClick={toggleListen} aria-label={listening ? "Stop listening" : "Start listening"} aria-pressed={listening}>{listening ? <MicOff size={22} /> : <Mic size={22} />}</button>
@@ -301,6 +357,8 @@ export default function Board({ lessonId }: { lessonId: string }) {
           <label className="row" style={{ justifyContent: "space-between" }}>Language<select value={lang} onChange={e => setLang(e.target.value)}><option value="en-US">English (US)</option><option value="en-IN">English (India)</option><option value="hi-IN">Hindi</option><option value="ta-IN">Tamil</option><option value="es-ES">Spanish</option></select></label>
           <label className="row" style={{ justifyContent: "space-between" }}>Typing animation<input type="checkbox" checked={anim} onChange={e => setAnim(e.target.checked)} /></label>
           <label>Typing speed: {speed} chars/s<input type="range" style={{ width: "100%" }} min={5} max={120} value={speed} onChange={e => setSpeed(+e.target.value)} /></label>
+          <label className="row" style={{ justifyContent: "space-between" }}>Text size {tsize}<input type="range" min={12} max={120} value={tsize} onChange={e => setTextSize(+e.target.value)} /></label>
+          <label className="row" style={{ justifyContent: "space-between" }}>Text colour<input type="color" value={tcolor} onChange={e => pickTextColor(e.target.value)} aria-label="Transcript text colour" /></label>
         </section>
         <section><h3>Type instead</h3><form className="row" onSubmit={e => { e.preventDefault(); if (typed.trim()) { addText(typed.trim()); setTyped(""); } }}><input style={{ flex: 1 }} value={typed} onChange={e => setTyped(e.target.value)} placeholder="Type a line for the board" aria-label="Type a line for the board" /><button className="primary">Add</button></form></section>
         <section><h3>Transcript</h3><textarea rows={8} value={transcript} onChange={e => { setTranscript(e.target.value); setSave("Unsaved"); }} aria-label="Transcript" placeholder="Recognized speech is kept here. Edit it for your records." />
@@ -322,6 +380,9 @@ export default function Board({ lessonId }: { lessonId: string }) {
         <button className="qa-toggle sm" aria-expanded={qa} onClick={() => setQa(v => !v)}><ChevronUp size={15} style={{ transform: qa ? "rotate(180deg)" : "none", transition: "transform .2s" }} /> Quick Access</button>
         <div className="qa-panel" aria-hidden={!qa}><div className="qa-in">
           <div className="grp">{tl("select", MousePointer2, "Select")}{tl("pen", Pencil, "Pen")}{tl("hl", Highlighter, "Highlighter")}{tl("eraser", Eraser, "Eraser")}{tl("text", Type, "Text")}</div>
+          <div className="grp shapes-q" role="group" aria-label="Shapes">{SHAPES.map(([k, I, l]) => Ib(<I size={18} />, l, tool === k, () => setTool(k)))}</div>
+          <label className="row">Text {tsize}<input type="range" min={12} max={120} value={tsize} onChange={e => setTextSize(+e.target.value)} /></label><input type="color" value={tcolor} onChange={e => pickTextColor(e.target.value)} aria-label="Text colour" />
+          <div className="grp">{Ib(<List size={18} />, "Bulleted list", false, () => addList(false))}{Ib(<ListOrdered size={18} />, "Numbered list", false, () => addList(true))}</div>
           <input type="color" value={color} onChange={e => pickColor(e.target.value)} aria-label="Colour" /><label className="row">Size {width}<input type="range" min={1} max={60} value={width} onChange={e => setWidth(+e.target.value)} /></label>
           <div className="grp">{Ib(<Undo2 size={18} />, "Undo", false, undo)}{Ib(<Redo2 size={18} />, "Redo", false, redoF)}</div>
           <button className="sm" onClick={goGraph}><Sigma size={15} /> Graph Studio</button>{so2?.graph && <button className="sm" onClick={editGraph}><Sigma size={15} /> Edit selected graph</button>}

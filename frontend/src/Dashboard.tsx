@@ -19,7 +19,7 @@ export default function Dashboard({ full }: { full?: boolean }) {
         <div className="row"><button className="primary" onClick={create}><Plus size={16} /> Create New Board</button></div></div>
       {!full && <div className="actions">
         <button className="card act" disabled={!last} onClick={() => last && (location.hash = "#/board/" + last.id)}><Play size={18} /><b>Continue Lesson</b><small>{last ? last.title : "No lessons yet"}</small></button>
-        <button className="card act" onClick={() => (location.hash = "#/studio")}><Mic size={18} /><b>Record Lecture</b><small>Up to 60 minutes, with transcript</small></button>
+        <button className="card act" onClick={() => (location.hash = "#/studio")}><Mic size={18} /><b>Record Lecture</b><small>With live transcript</small></button>
         <button className="card act" onClick={() => (location.hash = "#/mobile")}><Smartphone size={18} /><b>Connect Mobile</b><small>Pair a phone as remote</small></button>
         <button className="card act" onClick={() => (location.hash = "#/import")}><FileUp size={18} /><b>Import PDF</b><small>Annotate pages on the board</small></button>
       </div>}

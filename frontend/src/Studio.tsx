@@ -15,7 +15,6 @@ const LANGS: [string, string][] = [["ta-IN", "Tamil"], ["en-US", "English (US)"]
 const langName = (c: string) => LANGS.find(l => l[0] === c)?.[1] || c;
 const TLANGS = [...new Map(LANGS.map(([c, n]) => [c.split("-")[0], n.replace(/ \(.*\)/, "")] as [string, string])).entries()];
 const BMT = ["Important", "Exam Point", "Doubt", "Homework", "Example", "Custom"];
-const MAX = 3600;
 const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 const warnLeave = (e: BeforeUnloadEvent) => e.preventDefault();
 const elapsedNow = (r: any) => r.base + (r.running ? (performance.now() - r.t0) / 1000 : 0);
@@ -42,7 +41,7 @@ export function Studio() {
   const pollGraph = () => { const r = R.current; if (!r.running) { r.evSeen = Date.now(); return; } try { const a = JSON.parse(localStorage.getItem("vb-gev") || "[]").filter((e: any) => e.at > r.evSeen); if (!a.length) return; r.evSeen = Math.max(...a.map((e: any) => e.at));
     a.forEach((e: any) => { const t = Math.max(0, elapsedNow(r) - (Date.now() - e.at) / 1000), id = crypto.randomUUID(); r.gev.push({ id, t, kind: e.kind, text: e.text, seg: r.segs.length - 1 }); if (e.def) { r.gfr.push({ id, t, def: e.def }); if (r.gfr.length > 150) r.gfr.shift(); } }); setGcount(r.gev.length + r.gsn.length); r.meta?.(); } catch { /* ignore */ } };
   const snap = () => { const r = R.current; try { const g = JSON.parse(localStorage.getItem("vb-graph-last") || "null"); if (!g) { setWarn("No graph yet. Open Graph Studio in another tab or window, build a graph, then try again."); return; } if (r.gsn.length >= 15) { setWarn("At most 15 graph snapshots per recording."); return; } r.gsn.push({ id: crypto.randomUUID(), t: elapsedNow(r), seg: r.segs.length - 1, src: g.src, def: g.def }); setGcount(r.gev.length + r.gsn.length); r.meta?.(); } catch { setWarn("Could not read the graph snapshot."); } };
-  const tick = () => { const e = elapsedNow(R.current); setEl(e); if (e >= MAX) { setWarn("The 60-minute limit was reached, so the recording was stopped and saved."); stop(); } };
+  const tick = () => setEl(elapsedNow(R.current));
   const draw = () => { const r = R.current, c = cv.current; if (!c) return; const x = c.getContext("2d")!; const w = (c.width = c.clientWidth * 2), h = (c.height = 128); x.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--acc") || "#2dd4bf";
     if (r.an && r.running) { const d = new Uint8Array(r.an.fftSize); r.an.getByteTimeDomainData(d); const bars = 56, step = Math.floor(d.length / bars); for (let i = 0; i < bars; i++) { let m = 0; for (let k = 0; k < step; k++) m = Math.max(m, Math.abs(d[i * step + k] - 128)); const bh = Math.max(4, (m / 128) * h * 2); x.fillRect(i * (w / bars) + 2, (h - bh) / 2, w / bars - 4, bh); } } else { x.globalAlpha = 0.3; x.fillRect(0, h / 2 - 1, w, 2); }
     r.raf = requestAnimationFrame(draw); };
@@ -98,7 +97,7 @@ export function Studio() {
   const mic = st === "PAUSED" ? <Play /> : <Mic />;
   return (
     <div className="page">
-      <div className="pagehead"><div><h1>Lecture Studio</h1><p className="mut">Record up to 60 minutes. Audio is saved in this browser as you go.</p></div><span className={"badge st-" + st} role="status">{LABEL[st]}</span></div>
+      <div className="pagehead"><div><h1>Lecture Studio</h1><p className="mut">Audio is saved in this browser as you go.</p></div><span className={"badge st-" + st} role="status">{LABEL[st]}</span></div>
       {err && <div className="note err" role="alert"><X size={16} /><div>{err} {savedUrl && <a className="btn sm" download="lecture-audio.webm" href={savedUrl}><Download size={14} /> Download audio</a>}</div></div>}
       {warn && <div className="note" role="status"><Clock size={16} />{warn}</div>}
       {st === "RECOVERABLE_SESSION" && recov && <div className="card" role="alert"><h2>Unfinished recording found</h2><p className="mut" style={{ margin: "6px 0 12px" }}>A recording ({langName(recov.lang)}, about {mm(recov.elapsed || 0)}) was interrupted. Recovery depends on what the browser managed to store.</p><div className="row"><button className="primary" onClick={recover}>Recover recording</button><button className="danger" onClick={discard}>Delete it</button></div></div>}
@@ -106,7 +105,7 @@ export function Studio() {
         <div className="card rec">
           <button className={"bigmic" + (st === "RECORDING" ? " live" : "")} aria-label={st === "PAUSED" ? "Resume recording" : "Start recording"} disabled={!(st === "READY" || st === "ERROR" || st === "COMPLETED" || st === "PAUSED")} onClick={st === "PAUSED" ? resume : start}>{st === "RECORDING" ? <Mic /> : mic}</button>
           <div className="timer" aria-label="Elapsed time">{hms(el)}</div>
-          <small>of 60:00, remaining {hms(MAX - el)}</small><div className="lim"><i style={{ width: (el / MAX) * 100 + "%" }} /></div>
+          
           {active && <canvas ref={cv} className="meter" aria-hidden="true" />}
           {active ? <div className="row" style={{ justifyContent: "center" }}>
             {st === "RECORDING" ? <button onClick={pause}><Pause size={16} /> Pause</button> : <button onClick={resume}><Play size={16} /> Resume</button>}
@@ -127,7 +126,7 @@ export function Studio() {
           <small>Offline engine: {off?.installed ? "Vosk installed" : "not installed"}{off && !off.ffmpeg ? ", ffmpeg missing" : ""}. Free disk: {off?.free_mb ?? "?"} MB. A language works offline only if a matching model is listed here.</small>
           {off?.models?.map((m: any) => <div className="row" key={m.name} style={{ justifyContent: "space-between" }}><small>{m.name} ({m.size_mb} MB, {m.langs.join(", ") || "unknown language"})</small><button className="sm danger" disabled={active} onClick={() => rmModel(m.name)}>Remove</button></div>)}
           {off && !off.models?.length && <small>No models installed. Download a Vosk model and unzip it into backend/models (see README); in-app download is not available.</small>}
-          <small>Permission: {perm}. Quality: Opus about 32 kbps (roughly 14 MB per hour). Maximum 60 minutes; recording stops automatically at the limit.</small>
+          <small>Permission: {perm}. Quality: Opus about 32 kbps (roughly 14 MB per hour).</small>
           <small>Live transcription: {SR ? "available in this browser (uses the browser's speech service over the internet)" : "not available in this browser"}. Saved-audio transcription: {info?.configured ? `configured (${info.provider})` : "not configured on the backend"}. The language list is a set of common choices; support depends on the service and is not checked in advance.</small>
           <small><ShieldCheck size={13} /> Privacy: audio is kept only in this browser's storage. It is uploaded only if you press Transcribe on a recording, and it is deleted when you delete the recording. Transcripts and bookmarks are stored by the VoxBoard backend.</small>
         </div>

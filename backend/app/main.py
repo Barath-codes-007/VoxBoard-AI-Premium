@@ -43,7 +43,7 @@ def get_lesson(i: str):
 @app.put("/api/lessons/{i}")
 def save_lesson(i: str, l: LessonIn):
     raw = json.dumps(l.data)
-    if len(raw) > 250_000_000: raise HTTPException(413, "Lesson too large")
+    if len(raw) > 1_500_000_000: raise HTTPException(413, "Lesson too large")
     with db() as c:
         n = c.execute("update lessons set title=?,data=?,modified=? where id=?", (l.title, raw, time.time(), i)).rowcount
     if not n: raise HTTPException(404, "Lesson not found")
@@ -164,20 +164,41 @@ async def transcribe(file: UploadFile = File(...), language: str = Form("")):
     if prov == "none" or not key:
         raise HTTPException(503, "Saved-audio transcription is not configured. Set STT_PROVIDER=openai and STT_API_KEY on the backend (see README).")
     data = await file.read()
-    if len(data) > 25 * 1024 * 1024: raise HTTPException(413, "Audio is larger than 25 MB, the provider limit.")
     import httpx
     base = os.environ.get("STT_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     form = {"model": os.environ.get("STT_MODEL", "whisper-1"), "response_format": "verbose_json"}
     if language: form["language"] = language[:3]
-    try:
-        async with httpx.AsyncClient(timeout=600) as c:
-            r = await c.post(base + "/audio/transcriptions", headers={"Authorization": "Bearer " + key},
-                             files={"file": (file.filename or "audio.webm", data, file.content_type or "audio/webm")}, data=form)
-    except httpx.HTTPError:
-        raise HTTPException(502, "Could not reach the transcription service.")
-    if r.status_code != 200: raise HTTPException(502, f"Transcription service returned an error ({r.status_code}).")
-    j = r.json()
-    return {"text": j.get("text", ""), "segments": [{"start": float(s["start"]), "end": float(s["end"]), "text": str(s["text"]).strip()} for s in j.get("segments", [])]}
+
+    async def call(name, blob, ctype):
+        try:
+            async with httpx.AsyncClient(timeout=900) as c:
+                r = await c.post(base + "/audio/transcriptions", headers={"Authorization": "Bearer " + key}, files={"file": (name, blob, ctype)}, data=form)
+        except httpx.HTTPError:
+            raise HTTPException(502, "Could not reach the transcription service.")
+        if r.status_code != 200: raise HTTPException(502, f"Transcription service returned an error ({r.status_code}).")
+        return r.json()
+
+    def pack(j, off=0):
+        return [{"start": float(s["start"]) + off, "end": float(s["end"]) + off, "text": str(s["text"]).strip()} for s in j.get("segments", [])]
+
+    if len(data) <= 24 * 1024 * 1024:
+        j = await call(file.filename or "audio.webm", data, file.content_type or "audio/webm")
+        return {"text": j.get("text", ""), "segments": pack(j)}
+    # Long recordings: split into 20-minute pieces with ffmpeg, transcribe each, and join with corrected timestamps.
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(413, "This recording is too large for the provider in one request. Install ffmpeg on the backend so it can be split automatically.")
+    segs, text = [], []
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "in.audio")
+        with open(src, "wb") as fh: fh.write(data)
+        try:
+            await run_in_threadpool(lambda: subprocess.run(["ffmpeg", "-y", "-i", src, "-ac", "1", "-ar", "16000", "-b:a", "32k", "-f", "segment", "-segment_time", "1200", "-reset_timestamps", "1", os.path.join(d, "p%04d.mp3")], check=True, capture_output=True))
+        except Exception:
+            raise HTTPException(500, "Could not split the recording.")
+        for i, name in enumerate(sorted(f for f in os.listdir(d) if f.startswith("p") and f.endswith(".mp3"))):
+            with open(os.path.join(d, name), "rb") as fh: blob = fh.read()
+            j = await call(name, blob, "audio/mpeg"); segs += pack(j, i * 1200); text.append(j.get("text", ""))
+    return {"text": " ".join(text), "segments": segs}
 
 
 # ---- offline transcription (optional Vosk engine; models are folders in backend/models) ----
@@ -227,7 +248,6 @@ async def offline_transcribe(file: UploadFile = File(...), language: str = Form(
     m = next((x for x in info["models"] if language[:3].lower() in x["langs"]), None)
     if not m: raise HTTPException(503, "No installed offline model matches this language.")
     data = await file.read()
-    if len(data) > 300 * 1024 * 1024: raise HTTPException(413, "Audio file is too large.")
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "in.audio")
         with open(p, "wb") as fh: fh.write(data)

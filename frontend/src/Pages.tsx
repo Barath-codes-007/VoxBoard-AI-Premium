@@ -5,10 +5,10 @@ import { newLesson, pending, prefs } from "./store";
 export function ImportPage() {
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
   const go = async (f?: File) => {
-    if (!f) return; if (f.type !== "application/pdf") return setErr("Please choose a PDF file."); if (f.size > 100e6) return setErr("PDF is larger than 100 MB.");
+    if (!f) return; if (f.type !== "application/pdf") return setErr("Please choose a PDF file."); 
     setBusy(true); try { pending.pdf = f; location.hash = "#/board/" + await newLesson(); } catch { setErr("Could not create a lesson. Is the backend running?"); setBusy(false); }
   };
-  return <div className="page"><div className="pagehead"><div><h1>Import PDF</h1><p className="mut">Each PDF page becomes a board page you can annotate. Up to 150 pages and 100 MB, rendered at high resolution.</p></div></div>
+  return <div className="page"><div className="pagehead"><div><h1>Import PDF</h1><p className="mut">Each PDF page becomes a board page you can annotate. Pages are rendered sharp enough to zoom, crop and rotate on the board.</p></div></div>
     <label className="drop"><FileUp size={26} /><b>{busy ? "Opening board…" : "Choose a PDF to annotate"}</b><span className="mut">A new lesson is created from the file</span><input className="sr" type="file" accept="application/pdf" disabled={busy} onChange={e => go(e.target.files?.[0])} /></label>
     {err && <div className="note err" role="alert">{err}</div>}</div>;
 }
@@ -37,6 +37,8 @@ export function SettingsPage() {
       <label>Default pen thickness: {p.width || 4}<input type="range" min={1} max={20} value={p.width || 4} onChange={e => set("width", +e.target.value)} /></label>
       <label>Speech language<select value={p.lang || "en-US"} onChange={e => set("lang", e.target.value)}><option value="en-US">English (US)</option><option value="en-IN">English (India)</option><option value="hi-IN">Hindi</option><option value="ta-IN">Tamil</option><option value="es-ES">Spanish</option></select></label>
       <label>Typing speed: {p.speed || 40} characters/s<input type="range" min={5} max={120} value={p.speed || 40} onChange={e => set("speed", +e.target.value)} /></label>
+      <label>Default text size: {p.tsize || 36}<input type="range" min={12} max={120} value={p.tsize || 36} onChange={e => set("tsize", +e.target.value)} /></label>
+      <label>Default text colour<input type="color" value={p.tcolor || "#111111"} onChange={e => set("tcolor", e.target.value)} /></label>
       <p className="mut">Speech recognition uses your browser's speech service, which sends audio to the browser vendor over the internet. VoxBoard does not record or store audio. Language availability depends on the browser.</p></div></div>;
 }
 export function HelpPage() {
